@@ -1,14 +1,12 @@
-/* Yendor M2 stub: prints each shim windowport call name to stdout.
- * Replaced in M3 by the JSON-NL emitter. */
+/* Shim windowport callback. Forwards each call to the JSON-NL emitter.
+ * M5 will replace the trivial fmt-only emit with per-event-type handlers
+ * that serialize the variadic args; for M3 we just emit the metadata. */
 
-#include <stdio.h>
-#include <stdarg.h>
+extern void unity_emit_callback(const char *name, const char *fmt);
 
 void
 unity_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
 {
     (void) ret_ptr;
-    (void) fmt;
-    printf("CB: %s\n", name);
-    fflush(stdout);
+    unity_emit_callback(name, fmt);
 }
