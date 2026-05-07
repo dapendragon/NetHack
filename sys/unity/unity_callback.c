@@ -17,12 +17,23 @@
 #include "hack.h"
 
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* Forward-declared so we don't need to expose it via a header. Mirrors
+ * the struct in unity_input_queue.c — kept in sync by hand. */
+struct unity_menu_pick {
+    long long id;
+    long      count;
+};
 
 extern int  unity_input_queue_pop_key(void);
 extern void unity_input_queue_pop_text(char *out, size_t outlen);
 extern int  unity_input_queue_pop_poskey(int *x, int *y, int *mod);
 extern int  unity_input_queue_pop_ext_cmd(void);
+extern int  unity_input_queue_pop_menu_pick(struct unity_menu_pick *out,
+                                            int outcap,
+                                            int expected_menu_id);
 extern void unity_emit_callback(const char *name, const char *fmt);
 extern void unity_emit_event_begin(const char *name);
 extern void unity_emit_event_end(void);
@@ -448,7 +459,13 @@ handle_yn_function(va_list ap, void *ret_ptr)
     }
 }
 
-/* ---- menu emitters (M5 emit-only; select_menu / message_menu wait for M6) ---- */
+/* ---- menu emitters + interactive picks ---- */
+
+/* M6: each shim_start_menu allocates a session-unique menu_id that gets
+ * surfaced in the start_menu / end_menu / select_menu events so the
+ * harness can correlate its menu_pick reply back to the right prompt. */
+static int s_next_menu_id = 1;
+static int s_current_menu_id = 0;
 
 /* shim_start_menu fmt is "vii": winid, unsigned long mbehavior.
  * mbehavior is a flag bitfield (MENU_BEHAVE_*); we surface it raw and
@@ -460,9 +477,12 @@ handle_start_menu(va_list ap, void *ret_ptr)
     unsigned long mbeh = va_arg(ap, unsigned long);
     (void) ret_ptr;
 
+    s_current_menu_id = s_next_menu_id++;
+
     unity_emit_event_begin("start_menu");
     unity_emit_kv_int("w", w);
     unity_emit_kv_uint("mbehavior", (unsigned long long) mbeh);
+    unity_emit_kv_int("menu_id", s_current_menu_id);
     unity_emit_event_end();
 }
 
@@ -494,6 +514,7 @@ handle_add_menu(va_list ap, void *ret_ptr)
 
     unity_emit_event_begin("add_menu");
     unity_emit_kv_int("w", w);
+    unity_emit_kv_int("menu_id", s_current_menu_id);
     unity_emit_kv_int("id", id_val);
     unity_emit_kv_str("ch", ch_buf);
     unity_emit_kv_str("gch", gch_buf);
@@ -520,7 +541,84 @@ handle_end_menu(va_list ap, void *ret_ptr)
     unity_emit_event_begin("end_menu");
     unity_emit_kv_int("w", w);
     unity_emit_kv_str("prompt", prompt);
+    unity_emit_kv_int("menu_id", s_current_menu_id);
     unity_emit_event_end();
+}
+
+/* shim_select_menu fmt is "iiip": winid, int how, MENU_ITEM_P **menu_list.
+ * Returns int — count of items picked, 0 for "no pick" (engine often
+ * loops on this for PICK_ANY), or -1 for cancel.
+ *
+ * We emit the prompt, block on the input queue, and on a positive pick
+ * count allocate a MENU_ITEM_P array sized to fit. The engine takes
+ * ownership and frees it via a plain free(). union any.a_int64 carries
+ * the id we sent on add_menu — on x64 little-endian the lower 4 bytes
+ * are also a_int and the lower 8 bytes are a_void, so fields the engine
+ * reads via either accessor see the same payload. */
+static void
+handle_select_menu(va_list ap, void *ret_ptr)
+{
+    int w = va_arg(ap, int);
+    int how = va_arg(ap, int);
+    MENU_ITEM_P **menu_list = va_arg(ap, MENU_ITEM_P **);
+    struct unity_menu_pick picks[256];
+    int n;
+
+    unity_emit_event_begin("select_menu");
+    unity_emit_kv_int("w", w);
+    unity_emit_kv_int("how", how);
+    unity_emit_kv_int("menu_id", s_current_menu_id);
+    unity_emit_event_end();
+    unity_emit_flush();
+
+    n = unity_input_queue_pop_menu_pick(picks, 256, s_current_menu_id);
+
+    if (menu_list)
+        *menu_list = NULL;
+    if (n > 0 && menu_list) {
+        MENU_ITEM_P *items =
+            (MENU_ITEM_P *) malloc((size_t) n * sizeof *items);
+        if (items) {
+            int i;
+            for (i = 0; i < n; i++) {
+                items[i].item.a_int64 = picks[i].id;
+                items[i].count = picks[i].count;
+                items[i].itemflags = 0;
+            }
+            *menu_list = items;
+        } else {
+            n = 0;
+        }
+    }
+    if (ret_ptr)
+        *(int *) ret_ptr = n;
+}
+
+/* shim_message_menu fmt is "ciis": char let, int how, const char *mesg.
+ * Returns char (the keystroke that picked an item, or '\033' to cancel).
+ * Same shape as yn_function — emit prompt, block on key queue, return. */
+static void
+handle_message_menu(va_list ap, void *ret_ptr)
+{
+    int let = va_arg(ap, int);  /* char promoted */
+    int how = va_arg(ap, int);
+    const char *mesg = va_arg(ap, const char *);
+    char let_buf[2];
+
+    let_buf[0] = (char) let;
+    let_buf[1] = '\0';
+
+    unity_emit_event_begin("message_menu");
+    unity_emit_kv_str("let", let_buf);
+    unity_emit_kv_int("how", how);
+    unity_emit_kv_str("mesg", mesg);
+    unity_emit_event_end();
+    unity_emit_flush();
+
+    if (ret_ptr) {
+        int k = unity_input_queue_pop_key();
+        *(char *) ret_ptr = (char) ((k < 0) ? '\033' : k);
+    }
 }
 
 /* shim_getlin fmt is "vsp": const char *query, char *bufp.
@@ -620,6 +718,8 @@ static const struct {
     { "shim_start_menu",         handle_start_menu },
     { "shim_add_menu",           handle_add_menu },
     { "shim_end_menu",           handle_end_menu },
+    { "shim_select_menu",        handle_select_menu },
+    { "shim_message_menu",       handle_message_menu },
     { NULL, NULL }
 };
 

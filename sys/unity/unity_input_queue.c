@@ -20,8 +20,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define KEY_QUEUE_CAP 256
-#define TEXT_LEN      512  /* BUFSZ is 256; this gives margin */
+#define KEY_QUEUE_CAP   256
+#define TEXT_LEN        512   /* BUFSZ is 256; this gives margin */
+#define MENU_PICK_CAP   256   /* max items selectable in a single menu */
+
+/* One entry in a menu_pick reply. id is the ANY_P identifier the engine
+ * gave us via add_menu (we send a_int64); count is the optional stack
+ * count (-1 = "all", 0 / unset = "no count specified"). */
+struct unity_menu_pick {
+    long long id;
+    long      count;
+};
 
 /* Key FIFO. */
 static int               key_buf[KEY_QUEUE_CAP];
@@ -47,6 +56,17 @@ static CONDITION_VARIABLE cv_pos;
 static int               ext_cmd_value;
 static int               ext_cmd_present = 0;
 static CONDITION_VARIABLE cv_ext_cmd;
+
+/* Menu pick rendezvous (for select_menu). count >= 0 → that many picks
+ * in menu_pick_buf; count == -1 → user cancelled (engine returns -1
+ * from select_menu). The matching menu_id is stored so the harness can
+ * verify scope (mismatches still pass through but log a warning). */
+static struct unity_menu_pick menu_pick_buf[MENU_PICK_CAP];
+static int                    menu_pick_count = 0;
+static int                    menu_pick_cancelled = 0;
+static int                    menu_pick_menu_id = 0;
+static int                    menu_pick_present = 0;
+static CONDITION_VARIABLE     cv_menu_pick;
 
 static CRITICAL_SECTION  cs;
 static HANDLE            reader_thread = NULL;
@@ -79,6 +99,36 @@ parse_json_int(const char *p, int *out)
     }
     *out = neg ? -v : v;
     return p;
+}
+
+/* 64-bit signed JSON integer for menu pick ids — they roundtrip through
+ * the engine's union any.a_int64 so they're potentially full 64-bit. */
+static const char *
+parse_json_int64(const char *p, long long *out)
+{
+    int neg = 0;
+    long long v = 0;
+
+    p = skip_ws(p);
+    if (*p == '-') { neg = 1; p++; }
+    if (*p < '0' || *p > '9')
+        return NULL;
+    while (*p >= '0' && *p <= '9') {
+        v = v * 10 + (long long) (*p - '0');
+        p++;
+    }
+    *out = neg ? -v : v;
+    return p;
+}
+
+/* Parse a JSON true/false literal. Returns pointer past the literal. */
+static const char *
+parse_json_bool(const char *p, int *out)
+{
+    p = skip_ws(p);
+    if (strncmp(p, "true", 4) == 0) { *out = 1; return p + 4; }
+    if (strncmp(p, "false", 5) == 0) { *out = 0; return p + 5; }
+    return NULL;
 }
 
 /* Parse a JSON string at p (must be pointing at the opening quote).
@@ -133,6 +183,96 @@ parse_json_str(const char *p, char *out, size_t outlen)
         return NULL;
     if (outlen > 0)
         out[i] = '\0';
+    return p + 1;
+}
+
+/* Parse a JSON array of menu pick objects at p:
+ *     [{"id": N [, "count": N]}, ...]
+ * Writes up to outcap entries into out, returns pointer past the
+ * closing ']' on success and stores the count in *n_out. Returns NULL
+ * on a malformed array. count defaults to 0 if not supplied; the
+ * harness sends -1 for "all of this stack". */
+static const char *
+parse_menu_picks(const char *p, struct unity_menu_pick *out,
+                 int outcap, int *n_out)
+{
+    int n = 0;
+    p = skip_ws(p);
+    if (*p != '[') return NULL;
+    p++;
+    p = skip_ws(p);
+
+    if (*p == ']') {
+        *n_out = 0;
+        return p + 1;
+    }
+
+    while (*p) {
+        long long id = 0;
+        long count = 0;
+        int got_id = 0;
+
+        p = skip_ws(p);
+        if (*p != '{') return NULL;
+        p++;
+
+        while (*p) {
+            char key[16] = {0};
+            const char *next;
+            p = skip_ws(p);
+            if (*p == '}') break;
+
+            next = parse_json_str(p, key, sizeof key);
+            if (!next) return NULL;
+            p = next;
+            p = skip_ws(p);
+            if (*p != ':') return NULL;
+            p++;
+
+            if (strcmp(key, "id") == 0) {
+                next = parse_json_int64(p, &id);
+                if (!next) return NULL;
+                p = next;
+                got_id = 1;
+            } else if (strcmp(key, "count") == 0) {
+                int v;
+                next = parse_json_int(p, &v);
+                if (!next) return NULL;
+                p = next;
+                count = v;
+            } else {
+                /* unknown key — skip it */
+                int depth = 0;
+                while (*p) {
+                    if (*p == '{' || *p == '[') depth++;
+                    else if (*p == '}' || *p == ']') {
+                        if (depth == 0) break;
+                        depth--;
+                    } else if (*p == ',' && depth == 0) break;
+                    if (*p) p++;
+                }
+            }
+            p = skip_ws(p);
+            if (*p == ',') { p++; continue; }
+            if (*p == '}') break;
+            return NULL;
+        }
+        if (*p != '}') return NULL;
+        p++;
+
+        if (got_id && n < outcap) {
+            out[n].id = id;
+            out[n].count = count;
+            n++;
+        }
+
+        p = skip_ws(p);
+        if (*p == ',') { p++; continue; }
+        if (*p == ']') break;
+        return NULL;
+    }
+    if (*p != ']') return NULL;
+    *n_out = n;
     return p + 1;
 }
 
@@ -221,6 +361,22 @@ push_ext_cmd(int idx)
     WakeConditionVariable(&cv_ext_cmd);
 }
 
+static void
+push_menu_pick(int menu_id, int cancelled,
+               const struct unity_menu_pick *picks, int n_picks)
+{
+    if (menu_pick_present)
+        fprintf(stderr, "yendor: overwriting unconsumed answer_menu_pick\n");
+    menu_pick_menu_id = menu_id;
+    menu_pick_cancelled = cancelled;
+    menu_pick_count = (n_picks > MENU_PICK_CAP) ? MENU_PICK_CAP : n_picks;
+    if (menu_pick_count > 0)
+        memcpy(menu_pick_buf, picks,
+               (size_t) menu_pick_count * sizeof picks[0]);
+    menu_pick_present = 1;
+    WakeConditionVariable(&cv_menu_pick);
+}
+
 /* ---- top-level command parser ---- */
 
 /* Parse one JSON-NL command line. On success, enqueues the matching
@@ -236,6 +392,11 @@ parse_and_enqueue(const char *line)
     int  key_val = -1;
     int  pos_x = -1, pos_y = -1, pos_mod = 0, pos_key = 0;
     int  ext_idx = -1;
+    int  menu_id = 0;
+    int  menu_cancelled = 0;
+    int  has_picks = 0;
+    int  picks_n = 0;
+    struct unity_menu_pick picks[MENU_PICK_CAP];
 
     if (*p != '{')
         return -1;
@@ -297,6 +458,19 @@ parse_and_enqueue(const char *line)
             next = parse_json_int(p, &ext_idx);
             if (!next) return -1;
             p = next;
+        } else if (strcmp(key, "menu_id") == 0) {
+            next = parse_json_int(p, &menu_id);
+            if (!next) return -1;
+            p = next;
+        } else if (strcmp(key, "cancelled") == 0) {
+            next = parse_json_bool(p, &menu_cancelled);
+            if (!next) return -1;
+            p = next;
+        } else if (strcmp(key, "picks") == 0) {
+            next = parse_menu_picks(p, picks, MENU_PICK_CAP, &picks_n);
+            if (!next) return -1;
+            p = next;
+            has_picks = 1;
         } else {
             p = skip_json_value(p);
         }
@@ -317,6 +491,10 @@ parse_and_enqueue(const char *line)
         push_pos(pos_x, pos_y, pos_mod, pos_key);
     } else if (strcmp(cmd, "answer_ext_cmd") == 0) {
         push_ext_cmd(ext_idx);
+    } else if (strcmp(cmd, "answer_menu_pick") == 0) {
+        push_menu_pick(menu_id, menu_cancelled,
+                       has_picks ? picks : NULL,
+                       has_picks ? picks_n : 0);
     } else {
         LeaveCriticalSection(&cs);
         fprintf(stderr, "yendor: ignoring unsupported command \"%s\"\n", cmd);
@@ -343,6 +521,7 @@ stdin_reader(LPVOID arg)
     WakeAllConditionVariable(&cv_text);
     WakeAllConditionVariable(&cv_pos);
     WakeAllConditionVariable(&cv_ext_cmd);
+    WakeAllConditionVariable(&cv_menu_pick);
     LeaveCriticalSection(&cs);
     return 0;
 }
@@ -357,6 +536,7 @@ unity_input_queue_init(void)
     InitializeConditionVariable(&cv_text);
     InitializeConditionVariable(&cv_pos);
     InitializeConditionVariable(&cv_ext_cmd);
+    InitializeConditionVariable(&cv_menu_pick);
     reader_thread = CreateThread(NULL, 0, stdin_reader, NULL, 0, NULL);
 }
 
@@ -453,4 +633,43 @@ unity_input_queue_pop_ext_cmd(void)
     ext_cmd_present = 0;
     LeaveCriticalSection(&cs);
     return v;
+}
+
+/* Block until the harness sends an answer_menu_pick. Returns:
+ *   >  0  number of picks written into out (up to outcap)
+ *   == 0  empty pick set (engine often loops on this for PICK_ANY)
+ *   <  0  cancelled (or stdin closed)
+ * If expected_menu_id != 0 and the harness sent a different menu_id,
+ * a warning is logged but the picks are still returned — no
+ * scope-mismatch enforcement at this layer. */
+int
+unity_input_queue_pop_menu_pick(struct unity_menu_pick *out, int outcap,
+                                int expected_menu_id)
+{
+    int n;
+    EnterCriticalSection(&cs);
+    while (!menu_pick_present && !shutting_down)
+        SleepConditionVariableCS(&cv_menu_pick, &cs, INFINITE);
+    if (!menu_pick_present) {
+        LeaveCriticalSection(&cs);
+        return -1;
+    }
+    if (expected_menu_id != 0 && menu_pick_menu_id != 0
+        && menu_pick_menu_id != expected_menu_id) {
+        fprintf(stderr,
+                "yendor: answer_menu_pick menu_id=%d but engine expected %d\n",
+                menu_pick_menu_id, expected_menu_id);
+    }
+    if (menu_pick_cancelled) {
+        menu_pick_present = 0;
+        LeaveCriticalSection(&cs);
+        return -1;
+    }
+    n = menu_pick_count;
+    if (n > outcap) n = outcap;
+    if (n > 0)
+        memcpy(out, menu_pick_buf, (size_t) n * sizeof out[0]);
+    menu_pick_present = 0;
+    LeaveCriticalSection(&cs);
+    return n;
 }
