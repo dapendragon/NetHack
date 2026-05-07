@@ -41,10 +41,6 @@ extern void        unity_input_queue_init(void);
 extern void        unity_input_queue_shutdown(void);
 extern void        unity_signals_init(void);
 
-/* Diagnostic trace to stderr — unbuffered so we can see exactly how
- * far the engine got even when stdout is mid-flush during a crash. */
-#define TRACE(msg) do { fputs("[unitymain] " msg "\n", stderr); fflush(stderr); } while (0)
-
 /* Pull `--<flag> <value>` out of argv, removing both tokens. Must be
  * called before argv is handed to early_init(). Returns the value (still
  * owned by argv's storage) or NULL if the flag wasn't present. */
@@ -79,7 +75,6 @@ main(int argc, char *argv[])
     name_arg = extract_kv_flag("--name", &argc, argv);
     unity_input_queue_init();
 
-    TRACE("before early_init");
     early_init(argc, argv);
     gh.hname = "NetHack";
     /* Every other port's main sets this — libnhmain.c:85 via getpid(),
@@ -87,15 +82,11 @@ main(int argc, char *argv[])
      * writes 0 into the lock placeholder file and downstream stale-lock
      * detection misbehaves. */
     svh.hackpid = (long) _getpid();
-    TRACE("before set_default_prefix_locations");
     set_default_prefix_locations(argv[0]);
-    if (sandbox_dir) {
-        TRACE("before unity_paths_set_sandbox");
+    if (sandbox_dir)
         unity_paths_set_sandbox(sandbox_dir);
-    }
 
     shim_graphics_set_callback(unity_shim_callback);
-    TRACE("before choose_windows");
     choose_windows("shim");
 
     /* initoptions() runs sf_init() (populates sfiprocs/sfoprocs save-
@@ -104,9 +95,7 @@ main(int argc, char *argv[])
      * config-file parse, etc. Every other port's main calls this; we
      * missed it for a while and chased the resulting crash deep into
      * newgame(). */
-    TRACE("before initoptions");
     initoptions();
-    TRACE("after initoptions");
 
     /* Plant the player name before plnamesuffix() runs so its role/race
      * suffix parsing has something to work with. The harness should
@@ -120,34 +109,25 @@ main(int argc, char *argv[])
 
     unity_emit_session_ready(sandbox_dir);
 
-    TRACE("before init_nhwindows");
     init_nhwindows(&argc, argv);
     /* Real ports set this inside their init_nhwindows; the shim doesn't.
      * Without it, panic()'s "Oops..." raw_print is skipped and any
      * engine-side panic exits silently. */
     iflags.window_inited = TRUE;
 
-    TRACE("before set_playmode");
     set_playmode();
     gp.plnamelen = 0;
-    TRACE("before plnamesuffix");
     plnamesuffix();
 
-    TRACE("before dlb_init");
     (void) dlb_init();
-    TRACE("before vision_init");
     vision_init();
-    TRACE("before init_sound_disp_gamewindows");
     init_sound_disp_gamewindows();
-    TRACE("after init_sound_disp_gamewindows");
 
     /* getlock() serializes concurrent runs and creates the empty
      * `<name>.0` level-lock placeholder file the engine reads later
      * when laying out dungeon levels. */
     if (*svp.plname) {
-        TRACE("before getlock");
         getlock();
-        TRACE("before restore_saved_game");
         nhfp = restore_saved_game();
         if (nhfp) {
             pline("Restoring save file...");
@@ -158,18 +138,13 @@ main(int argc, char *argv[])
     }
 
     if (!resuming) {
-        TRACE("before player_selection");
         player_selection();
-        TRACE("before newgame");
         newgame();
-        TRACE("after newgame");
     }
 
     /* moveloop never returns from a normal play session — death, save+
      * quit, and panic all exit the process directly. */
-    TRACE("before moveloop");
     moveloop(resuming);
-    TRACE("after moveloop (unexpected)");
 
     unity_input_queue_shutdown();
     return 0;

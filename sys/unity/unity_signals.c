@@ -27,8 +27,6 @@ extern void unity_emit_flush(void);
 static void
 fatal_handler(int sig)
 {
-    fprintf(stderr, "[unity_signals] fatal_handler sig=%d\n", sig);
-    fflush(stderr);
     /* Restore the default disposition so a re-raise actually crashes. */
     signal(sig, SIG_DFL);
     unity_emit_flush();
@@ -50,9 +48,6 @@ vectored_handler(EXCEPTION_POINTERS *ep)
     if (code == 0x40010006 || code == 0x4001000a)
         return EXCEPTION_CONTINUE_SEARCH;
 
-    fprintf(stderr, "[unity_signals] VEH code=0x%08lx addr=%p\n",
-            (unsigned long) code, ep->ExceptionRecord->ExceptionAddress);
-    fflush(stderr);
     unity_emit_flush();
     return EXCEPTION_CONTINUE_SEARCH;
 }
