@@ -11,6 +11,9 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 /* Globals from windmain.c / consoletty.c that windsys.o references. */
 boolean getreturn_enabled = TRUE;
@@ -43,6 +46,32 @@ void msmsg(const char *fmt, ...)
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
+}
+
+/* getlock() lives in sys/windows/windmain.c — which we don't link.
+ * The full version handles the lock_file(HLOCK) mutex and the
+ * SELF_RECOVER prompt; we don't need either (single-process headless,
+ * no save recovery prompt). What we DO need is the level-0 placeholder
+ * file at the gotlock: label (windmain.c:1118-1145) — without it, the
+ * first level access fails ENOENT and the player dies on turn 1. */
+int
+getlock(void)
+{
+    const char *fq_lock;
+    int fd;
+
+    set_levelfile_name(gl.lock, 0);
+    fq_lock = fqname(gl.lock, LEVELPREFIX, 1);
+    fd = creat(fq_lock, FCMASK);
+    if (fd == -1) {
+        char oops[256];
+        Sprintf(oops, "cannot creat %s: %s", fq_lock, strerror(errno));
+        raw_print(oops);
+        return 0;
+    }
+    (void) write(fd, (char *) &svh.hackpid, sizeof svh.hackpid);
+    (void) nhclose(fd);
+    return 1;
 }
 
 /* tty_procs is referenced by src/windows.c's winchoices[] table. We never

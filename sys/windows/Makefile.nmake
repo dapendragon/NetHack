@@ -3785,6 +3785,7 @@ $(OTTY)unity_callback.o: $(USYS)unity_callback.c
 $(OTTY)unity_event_emit.o: $(USYS)unity_event_emit.c
 $(OTTY)unity_input_queue.o: $(USYS)unity_input_queue.c
 $(OTTY)unity_paths.o: $(USYS)unity_paths.c $(HACK_H)
+$(OTTY)unity_signals.o: $(USYS)unity_signals.c
 $(OTTY)unity_stubs.o: $(USYS)unity_stubs.c $(HACK_H)
 
 # Engine OBJs for our link: ALLOBJTTY minus windmain.o, plus our unity bits
@@ -3792,8 +3793,8 @@ $(OTTY)unity_stubs.o: $(USYS)unity_stubs.c $(HACK_H)
 UNITY_NONMAIN_SOBJ = $(OTTY)windsys.o $(OTTY)win10.o
 UNITY_OBJS         = $(OTTY)unitymain.o $(OTTY)unity_callback.o \
                      $(OTTY)unity_event_emit.o $(OTTY)unity_input_queue.o \
-                     $(OTTY)unity_paths.o $(OTTY)unity_stubs.o \
-                     $(OTTY)winshim.o
+                     $(OTTY)unity_paths.o $(OTTY)unity_signals.o \
+                     $(OTTY)unity_stubs.o $(OTTY)winshim.o
 UNITY_ALLOBJ       = $(UNITY_NONMAIN_SOBJ) $(DLBOBJTTY) $(OBJSTTY) $(VVOBJTTY) \
                      $(LUAOBJTTY) $(UNITY_OBJS)
 
