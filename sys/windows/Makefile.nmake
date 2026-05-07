@@ -3813,13 +3813,19 @@ $(GAMEDIR)nethack_unity.exe : gamedir.tag $(UNITY_ALLOBJ) $(OTTY)date.o \
 << keep
 
 # Top-level convenience target. Mirrors `binary`'s prereqs minus the bits
-# (GUI/curses/pdcurses/sound) we don't link against.
+# (GUI/curses/pdcurses/sound) we don't link against. Also installs the
+# DLB archive (nhdat500) and a few harness-needed data files into
+# $(GAMEDIR) — without these the engine panics inside newgame() when
+# dlb_init can't find the level/help data.
+# UNITY_PORT
 nethack_unity: envchk.tag libdir.tag ottydir$(TARGET_CPU).tag \
                outldir$(TARGET_CPU).tag oluadir$(TARGET_CPU).tag \
                $(LUASRC)lua.h $(INCL)nhlua.h $(OUTL)utility.tag \
-               $(DAT)data $(DAT)rumors $(DAT)oracles $(DAT)engrave \
-               $(DAT)epitaph $(DAT)bogusmon \
+               nhdat$(NHV) \
                $(GAMEDIR)nethack_unity.exe
+	copy /Y nhdat$(NHV) $(GAMEDIR)
+	if exist $(DAT)license copy /Y $(DAT)license $(GAMEDIR)
+	if exist $(DAT)symbols copy /Y $(DAT)symbols $(GAMEDIR)
 	@echo Yendor nethack_unity.exe is up to date.
 # UNITY_PORT  ===================================================================
 
