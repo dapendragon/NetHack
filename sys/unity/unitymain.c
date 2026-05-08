@@ -20,6 +20,7 @@
 #include "hack.h"
 #include "dlb.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <process.h>
 
@@ -40,6 +41,7 @@ extern void        unity_paths_set_sandbox(const char *dir);
 extern void        unity_input_queue_init(void);
 extern void        unity_input_queue_shutdown(void);
 extern void        unity_signals_init(void);
+extern void        unity_seed_set(unsigned long seed);
 
 /* Pull `--<flag> <value>` out of argv, removing both tokens. Must be
  * called before argv is handed to early_init(). Returns the value (still
@@ -66,6 +68,7 @@ main(int argc, char *argv[])
 {
     const char *sandbox_dir;
     const char *name_arg;
+    const char *seed_arg;
     boolean resuming = FALSE;
     NHFILE *nhfp;
 
@@ -73,6 +76,11 @@ main(int argc, char *argv[])
     unity_signals_init();
     sandbox_dir = unity_paths_extract_sandbox(&argc, argv);
     name_arg = extract_kv_flag("--name", &argc, argv);
+    /* --seed N: deterministic RNG for save/restore and movement tests.
+     * Set before initoptions() runs init_random() (see options.c:7161). */
+    seed_arg = extract_kv_flag("--seed", &argc, argv);
+    if (seed_arg)
+        unity_seed_set(strtoul(seed_arg, NULL, 0));
     unity_input_queue_init();
 
     early_init(argc, argv);
