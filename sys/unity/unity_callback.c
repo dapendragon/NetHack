@@ -166,12 +166,20 @@ handle_putstr(va_list ap, void *ret_ptr)
     unity_emit_event_end();
 }
 
+/* Used by raw_print / raw_print_bold / exit_nhwindows / suspend_nhwindows,
+ * all of which take a single `const char *str`. NetHack passes NULL for
+ * the optional cases (exit_nhwindows in end.c:140/409/1580/1583 and
+ * cmd.c:5204; suspend likewise on hangup). Omit the key entirely on
+ * NULL so the schema can keep `str` typed as a plain string and so a
+ * real raw_print(NULL) — a caller bug — surfaces as a missing-required
+ * key. */
 static void
 emit_one_string_event(const char *event_name, va_list ap)
 {
     const char *s = va_arg(ap, const char *);
     unity_emit_event_begin(event_name);
-    unity_emit_kv_str("str", s);
+    if (s)
+        unity_emit_kv_str("str", s);
     unity_emit_event_end();
 }
 
