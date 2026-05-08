@@ -530,7 +530,10 @@ handle_add_menu(va_list ap, void *ret_ptr)
     unity_emit_event_end();
 }
 
-/* shim_end_menu fmt is "vis": winid, prompt str. */
+/* shim_end_menu fmt is "vis": winid, prompt str.
+ * NetHack passes prompt=NULL for menus without a title (the common
+ * case for inventory/pickup); omit the key entirely rather than
+ * emitting JSON null so the schema can keep `prompt` typed as str. */
 static void
 handle_end_menu(va_list ap, void *ret_ptr)
 {
@@ -540,7 +543,8 @@ handle_end_menu(va_list ap, void *ret_ptr)
 
     unity_emit_event_begin("end_menu");
     unity_emit_kv_int("w", w);
-    unity_emit_kv_str("prompt", prompt);
+    if (prompt)
+        unity_emit_kv_str("prompt", prompt);
     unity_emit_kv_int("menu_id", s_current_menu_id);
     unity_emit_event_end();
 }
