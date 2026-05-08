@@ -752,6 +752,16 @@ sys_random_seed(void)
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     boolean Plan_B = TRUE;
 
+    /* UNITY_PORT: harness-supplied --seed wins over the platform RNG so
+     * tests stay deterministic. has_strong_rngseed stays FALSE in that
+     * case so reseed_random() becomes a no-op (see rnd.c:289). */
+#ifdef WIN_UNITY
+    extern int           unity_seed_has_override(void);
+    extern unsigned long unity_seed_get(void);
+    if (unity_seed_has_override())
+        return unity_seed_get();
+#endif
+
     status = BCryptOpenAlgorithmProvider(&hRa, BCRYPT_RNG_ALGORITHM,
                                          (LPCWSTR) 0, 0);
     if (hRa && status == (NTSTATUS) STATUS_SUCCESS) {
