@@ -15,6 +15,8 @@
  * defaults; M5 Tier 2 / M6 fill those in. */
 
 #include "hack.h"
+#include "func_tab.h"  /* extcmdlist[] + IFBURIED/AUTOCOMPLETE/... flags;
+                        * not pulled in by hack.h (only cmd.c includes it) */
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -680,7 +682,40 @@ handle_nh_poskey(va_list ap, void *ret_ptr)
         *(int *) ret_ptr = key;
 }
 
-/* shim_get_ext_cmd fmt is "iv": no args, returns int. The harness sends
+/* Emit the table of extended commands the player may invoke, as a
+ * `commands` object mapping each command name to its index:
+ *   "commands": { "quit": 17, "pray": 42, ... }
+ * The index is exactly the position doextcmd() indexes back into
+ * (src/cmd.c:504 `extcmdlist[idx]`), so a returned answer_ext_cmd.index
+ * round-trips directly with no separate lookup table on the engine side.
+ *
+ * Visibility mirrors what tty's extcmds_match() would offer when the
+ * player types a full command name: skip non-functional and internal
+ * entries, and skip wizard-mode commands outside wizard mode. We do NOT
+ * require AUTOCOMPLETE — that flag only governs tty tab-completion
+ * suggestions; any visible command can still be typed out in full. */
+static void
+emit_ext_cmd_list(void)
+{
+    int i;
+
+    unity_emit_kv_obj_begin("commands");
+    for (i = 0; extcmdlist[i].ef_txt != NULL; i++) {
+        unsigned f = extcmdlist[i].flags;
+
+        if (f & (CMD_NOT_AVAILABLE | INTERNALCMD))
+            continue;
+        if ((f & WIZMODECMD) && !wizard)
+            continue;
+
+        unity_emit_kv_int(extcmdlist[i].ef_txt, i);
+    }
+    unity_emit_kv_obj_end();
+}
+
+/* shim_get_ext_cmd fmt is "iv": no args, returns int. We enrich the event
+ * with the `commands` table so the bridge can resolve a typed command
+ * name to the index this call expects back. The harness sends
  * `answer_ext_cmd` with `index` set to the ext-cmd table position; -1
  * means the user cancelled. */
 static void
@@ -688,6 +723,7 @@ handle_get_ext_cmd(va_list ap, void *ret_ptr)
 {
     (void) ap;
     unity_emit_event_begin("get_ext_cmd");
+    emit_ext_cmd_list();
     unity_emit_event_end();
     unity_emit_flush();
     if (ret_ptr)
