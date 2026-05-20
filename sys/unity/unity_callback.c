@@ -398,10 +398,26 @@ handle_cliparound(va_list ap, void *ret_ptr)
 static void
 handle_askname(va_list ap, void *ret_ptr)
 {
+    char namebuf[PL_NSIZ];
+
     (void) ap;
     (void) ret_ptr;
+
     unity_emit_event_begin("askname");
     unity_emit_event_end();
+    unity_emit_flush();
+
+    /* shim_askname is "v" (no args, no return). NetHack expects the
+     * windowport to fill svp.plname[] itself (src/role.c:1692). Block on a
+     * text answer (answer_text, same as getlin) and copy it in. An empty
+     * answer leaves plname untouched, so the engine treats it as "no name"
+     * and proceeds to pick/ask as usual. */
+    namebuf[0] = '\0';
+    unity_input_queue_pop_text(namebuf, sizeof namebuf);
+    if (namebuf[0]) {
+        (void) strncpy(svp.plname, namebuf, sizeof svp.plname - 1);
+        svp.plname[sizeof svp.plname - 1] = '\0';
+    }
 }
 
 /* shim_player_selection: similar story. The engine drives role/race/
