@@ -317,6 +317,49 @@ handle_clear_nhwindow(va_list ap, void *ret_ptr)
     unity_emit_event_end();
 }
 
+/* Emit the set of currently-visible map cells as a "vision" event.
+ *
+ * Why a dedicated event rather than a per-cell flag on print_glyph:
+ * flush_screen() only re-emits print_glyph for cells whose *glyph*
+ * changed (gptr->gnew). A cell leaving the hero's sight keeps the same
+ * remembered terrain glyph, so it is NOT re-emitted — a vis bit ridden
+ * on print_glyph would go stale. The vision array (gv.viz_array) is the
+ * authority and is current here: flush_screen() runs vision_recalc()
+ * before its final display_nhwindow(WIN_MAP). So we snapshot cansee()
+ * across the whole map on every map flush.
+ *
+ * Encoding: space-separated "x,y" decimal pairs in a single string
+ * field — keeps the existing kv_str emit path (no array support in the
+ * emitter) and stays trivially parseable on the C# side. The visible
+ * set is small in practice (a lit room/corridor, well under COLNO*ROWNO).
+ */
+static void
+emit_vision(void)
+{
+    /* Worst case every cell visible: "79,20 " is 6 chars, COLNO*ROWNO
+     * cells → ~10 KB. Round up generously and bound-check each append. */
+    static char buf[COLNO * ROWNO * 8];
+    size_t len = 0;
+    coordxy x, y;
+
+    for (y = 0; y < ROWNO; y++) {
+        for (x = 0; x < COLNO; x++) {
+            if (!cansee(x, y))
+                continue;
+            /* "x,y " — leave room for the largest pair plus space + NUL. */
+            if (len + 12 >= sizeof buf)
+                goto done; /* defensive: never overrun */
+            len += (size_t) snprintf(buf + len, sizeof buf - len,
+                                     "%s%d,%d", len ? " " : "", x, y);
+        }
+    }
+done:
+    buf[len] = '\0';
+    unity_emit_event_begin("vision");
+    unity_emit_kv_str("cells", buf);
+    unity_emit_event_end();
+}
+
 static void
 handle_display_nhwindow(va_list ap, void *ret_ptr)
 {
@@ -327,6 +370,10 @@ handle_display_nhwindow(va_list ap, void *ret_ptr)
     unity_emit_kv_int("w", w);
     unity_emit_kv_bool("blocking", blocking);
     unity_emit_event_end();
+
+    /* The map window's flush is our once-per-display vision tick. */
+    if (w == WIN_MAP)
+        emit_vision();
 }
 
 static void
