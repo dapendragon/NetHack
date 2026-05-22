@@ -80,16 +80,22 @@ unity_emit_manifest(void)
     unity_emit_event_end();
 
     for (i = 0; i < NUMMONS; i++) {
+        const char *nm = pmname(&mons[i], NEUTRAL);
         unity_emit_event_begin("manifest_mon");
         unity_emit_kv_int("idx", (long long) i);
-        unity_emit_kv_str("name", pmname(&mons[i], NEUTRAL));
+        unity_emit_kv_str("name", nm ? nm : "");
         unity_emit_event_end();
     }
 
+    /* NetHack has nameless object slots (placeholder / class-boundary entries
+     * with oc_name == NULL); OBJ_NAME() returns NULL for those. Emit "" rather
+     * than a JSON null so `name` is always a string — a modder addresses a
+     * nameless slot by its (still dense) index. */
     for (i = 0; i < NUM_OBJECTS; i++) {
+        const char *nm = OBJ_NAME(objects[i]);
         unity_emit_event_begin("manifest_obj");
         unity_emit_kv_int("idx", (long long) i);
-        unity_emit_kv_str("name", OBJ_NAME(objects[i]));
+        unity_emit_kv_str("name", nm ? nm : "");
         unity_emit_event_end();
     }
 
