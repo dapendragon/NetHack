@@ -42,6 +42,7 @@ extern void        unity_input_queue_init(void);
 extern void        unity_input_queue_shutdown(void);
 extern void        unity_signals_init(void);
 extern void        unity_seed_set(unsigned long seed);
+extern void        unity_emit_manifest(void);
 
 /* Pull `--<flag> <value>` out of argv, removing both tokens. Must be
  * called before argv is handed to early_init(). Returns the value (still
@@ -149,6 +150,13 @@ main(int argc, char *argv[])
         player_selection();
         newgame();
     }
+
+    /* One-shot content manifest (index->name for monsters/objects). Emitted
+     * here, after newgame()/restore, because OBJ_NAME() dereferences the
+     * oc_name_idx that init_objects() assigns inside newgame(). The Unity
+     * side consumes this to build modder-facing name aliases without
+     * transcribing NGPL'd name tables — see unity_emit_manifest(). */
+    unity_emit_manifest();
 
     /* moveloop never returns from a normal play session — death, save+
      * quit, and panic all exit the process directly. */
