@@ -47,6 +47,57 @@ extern void unity_emit_kv_bool(const char *key, int v);
 extern void unity_emit_kv_obj_begin(const char *key);
 extern void unity_emit_kv_obj_end(void);
 
+/* ---- one-shot content manifest ---- */
+
+/* Emit the canonical upstream index->name mapping for monsters (mons[] /
+ * pmname) and objects (objects[] / OBJ_NAME) as a burst of JSON-NL events,
+ * bracketed by manifest_begin / manifest_end:
+ *   {"t":"manifest_begin","monsters":N,"objects":M}
+ *   {"t":"manifest_mon","idx":I,"name":"gnome"}
+ *   {"t":"manifest_obj","idx":I,"name":"ring mail"}
+ *   {"t":"manifest_end"}
+ *
+ * This is the modder-facing name->index source of truth. The 3D content
+ * registry keys on the raw integer indices the engine already sends per
+ * glyph (mon_idx / obj_idx); this manifest lets the Unity side build
+ * PM_*-style aliases WITHOUT transcribing the monst.c / objects.c name
+ * tables into C#, keeping that NGPL'd data on the engine side of the
+ * boundary (see CLAUDE.md "Licensing hard constraint").
+ *
+ * Names are the canonical type names; the unidentified-appearance shuffle
+ * is per-game and resolved separately via the per-cell obj_idx. Indices are
+ * stable across games, which is exactly what a mod keys on. Emitted once at
+ * startup after newgame()/restore so init_objects() has assigned the
+ * oc_name_idx that OBJ_NAME() dereferences. */
+void
+unity_emit_manifest(void)
+{
+    int i;
+
+    unity_emit_event_begin("manifest_begin");
+    unity_emit_kv_int("monsters", (long long) NUMMONS);
+    unity_emit_kv_int("objects", (long long) NUM_OBJECTS);
+    unity_emit_event_end();
+
+    for (i = 0; i < NUMMONS; i++) {
+        unity_emit_event_begin("manifest_mon");
+        unity_emit_kv_int("idx", (long long) i);
+        unity_emit_kv_str("name", pmname(&mons[i], NEUTRAL));
+        unity_emit_event_end();
+    }
+
+    for (i = 0; i < NUM_OBJECTS; i++) {
+        unity_emit_event_begin("manifest_obj");
+        unity_emit_kv_int("idx", (long long) i);
+        unity_emit_kv_str("name", OBJ_NAME(objects[i]));
+        unity_emit_event_end();
+    }
+
+    unity_emit_event_begin("manifest_end");
+    unity_emit_event_end();
+    unity_emit_flush();
+}
+
 /* ---- glyph decoder helper ---- */
 
 /* Decode a single glyph_info into key/value pairs inside the currently-
