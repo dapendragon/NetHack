@@ -54,15 +54,19 @@ extern void unity_emit_kv_obj_end(void);
  * bracketed by manifest_begin / manifest_end:
  *   {"t":"manifest_begin","monsters":N,"objects":M}
  *   {"t":"manifest_mon","idx":I,"name":"gnome","class":C}
- *   {"t":"manifest_obj","idx":I,"name":"ring mail"}
+ *   {"t":"manifest_obj","idx":I,"name":"ring mail","class":C}
  *   {"t":"manifest_end"}
  *
- * `class` is the monster's mlet (the S_* symbol class, e.g. S_DOG) straight
- * from mons[i].mlet. The Unity side (M4.8 class-resolution tier) builds a
- * mon_idx->class map from this and maps each class to an authored rig/base
- * mesh, so ~40 class bases cover ~400 monsters as recognizable placeholders.
- * Emitting mlet here keeps the S_* class data on the NGPL engine side rather
- * than transcribing the monst.c class table into C#.
+ * On manifest_mon, `class` is the monster's mlet (the S_* symbol class, e.g.
+ * S_DOG) straight from mons[i].mlet. On manifest_obj, `class` is the object's
+ * oc_class (the *_CLASS symbol, e.g. WEAPON_CLASS) straight from
+ * objects[i].oc_class. The Unity side (M4.8/M4.9 class-resolution tiers)
+ * builds mon_idx->class and obj_idx->oc_class maps from these and maps each
+ * class to an authored rig/base mesh, so ~40 monster class bases cover ~400
+ * monsters and ~13 object class bases cover ~600 items as recognizable
+ * placeholders. Emitting mlet/oc_class here keeps the S_* and *_CLASS class
+ * data on the NGPL engine side rather than transcribing the monst.c /
+ * objects.c class tables into C#.
  *
  * This is the modder-facing name->index source of truth. The 3D content
  * registry keys on the raw integer indices the engine already sends per
@@ -104,6 +108,7 @@ unity_emit_manifest(void)
         unity_emit_event_begin("manifest_obj");
         unity_emit_kv_int("idx", (long long) i);
         unity_emit_kv_str("name", nm ? nm : "");
+        unity_emit_kv_int("class", (long long) objects[i].oc_class);
         unity_emit_event_end();
     }
 
