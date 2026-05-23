@@ -516,6 +516,17 @@ mattacku(struct monst *mtmp)
     if (Underwater && !is_swimmer(mtmp->data))
         return 0;
 
+#ifdef WIN_UNITY
+    /* UNITY_PORT: a visible melee attack on the hero this turn (youseeit = the
+       player can observe it, !ranged = adjacent). Emit the attacker's m_id so the
+       3D actor layer plays this monster's attack animation. The renderer only acts
+       on monsters it is tracking (visible), so an untracked attacker is ignored. */
+    if (youseeit && !ranged) {
+        extern void unity_emit_mon_event(const char *, unsigned);
+        unity_emit_mon_event("monster_attack", mtmp->m_id);
+    }
+#endif
+
     /* If swallowed, can only be affected by u.ustuck */
     if (u.uswallow) {
         if (mtmp != u.ustuck)

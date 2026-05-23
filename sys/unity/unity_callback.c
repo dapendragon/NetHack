@@ -474,6 +474,22 @@ emit_monsters(void)
     unity_emit_event_end();
 }
 
+/* One-shot per-monster gameplay event (death/attack) for the 3D actor layer.
+ *
+ * Unlike the per-flush `monsters` snapshot (which is positional state), these are
+ * transient signals the snapshot can't carry: WHICH instance died (vs. merely walked
+ * out of sight) and WHICH instance is attacking the hero. Emitted from surgical
+ * UNITY_PORT hooks in the core (mon.c m_detach, mhitu.c mattacku) keyed by m_id.
+ * Exported (non-static) so those core files can call it via an extern decl.
+ */
+void
+unity_emit_mon_event(const char *name, unsigned m_id)
+{
+    unity_emit_event_begin(name);
+    unity_emit_kv_uint("id", (unsigned long long) m_id);
+    unity_emit_event_end();
+}
+
 static void
 handle_display_nhwindow(va_list ap, void *ret_ptr)
 {

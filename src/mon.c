@@ -2738,6 +2738,18 @@ m_detach(
 {
     coordxy mx = mtmp->mx, my = mtmp->my;
 
+#ifdef WIN_UNITY
+    /* UNITY_PORT: m_detach is the single chokepoint for removing a monster from
+       the level; due_to_death distinguishes a real death from migration/genocide
+       (lifesave and vampshifter-revert return before reaching here). Emit the dying
+       instance's m_id so the 3D actor layer plays death on exactly that monster,
+       rather than guessing from the visible-set heuristic. */
+    if (due_to_death) {
+        extern void unity_emit_mon_event(const char *, unsigned);
+        unity_emit_mon_event("monster_death", mtmp->m_id);
+    }
+#endif
+
     if (mtmp->mleashed)
         m_unleash(mtmp, FALSE);
 
