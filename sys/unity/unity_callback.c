@@ -53,9 +53,16 @@ extern void unity_emit_kv_obj_end(void);
  * pmname) and objects (objects[] / OBJ_NAME) as a burst of JSON-NL events,
  * bracketed by manifest_begin / manifest_end:
  *   {"t":"manifest_begin","monsters":N,"objects":M}
- *   {"t":"manifest_mon","idx":I,"name":"gnome"}
+ *   {"t":"manifest_mon","idx":I,"name":"gnome","class":C}
  *   {"t":"manifest_obj","idx":I,"name":"ring mail"}
  *   {"t":"manifest_end"}
+ *
+ * `class` is the monster's mlet (the S_* symbol class, e.g. S_DOG) straight
+ * from mons[i].mlet. The Unity side (M4.8 class-resolution tier) builds a
+ * mon_idx->class map from this and maps each class to an authored rig/base
+ * mesh, so ~40 class bases cover ~400 monsters as recognizable placeholders.
+ * Emitting mlet here keeps the S_* class data on the NGPL engine side rather
+ * than transcribing the monst.c class table into C#.
  *
  * This is the modder-facing name->index source of truth. The 3D content
  * registry keys on the raw integer indices the engine already sends per
@@ -84,6 +91,7 @@ unity_emit_manifest(void)
         unity_emit_event_begin("manifest_mon");
         unity_emit_kv_int("idx", (long long) i);
         unity_emit_kv_str("name", nm ? nm : "");
+        unity_emit_kv_int("class", (long long) mons[i].mlet);
         unity_emit_event_end();
     }
 
