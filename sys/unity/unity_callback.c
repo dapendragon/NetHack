@@ -425,6 +425,55 @@ done:
     unity_emit_event_end();
 }
 
+/* Emit currently-visible monster instances as a "monsters" event.
+ *
+ * Companion to emit_vision(): walks the live monster chain (fmon) and, for
+ * each monster the hero can see (canseemon), emits its stable per-instance
+ * m_id plus position, permonst index, and HP. This is the authority the 3D
+ * actor layer needs that the positional glyph stream cannot give: the glyph
+ * stream only says "a monster of type T is at (x,y)", so it cannot tell one
+ * instance from another across turns. m_id lets the renderer track a specific
+ * monster (glide it between cells = walk, play hit when its hp drops, play
+ * death when it leaves the visible set).
+ *
+ * Filtered to canseemon so we never leak unseen monsters and the set matches
+ * exactly what the 3D layer renders (out-of-sight actors are culled anyway).
+ *
+ * Encoding mirrors emit_vision: space-separated records packed into one string
+ * field (the emitter has no array support), each "id,x,y,mnum,hp,hpmax,fl"
+ * where fl is a small bitmask (bit0 = tame/pet, bit1 = peaceful) so the renderer
+ * can keep the pet/peaceful tinting the glyph-flag path used to provide.
+ */
+static void
+emit_monsters(void)
+{
+    /* ~44 chars/record; the visible set is small. Bound-checked per append. */
+    static char buf[16384];
+    size_t len = 0;
+    struct monst *mtmp;
+
+    for (mtmp = fmon; mtmp; mtmp = mtmp->nmon) {
+        int fl;
+
+        if (DEADMONSTER(mtmp))
+            continue;
+        if (!canseemon(mtmp))
+            continue;
+        if (len + 64 >= sizeof buf)
+            break; /* defensive: never overrun */
+        fl = (mtmp->mtame ? 1 : 0) | (mtmp->mpeaceful ? 2 : 0);
+        len += (size_t) snprintf(buf + len, sizeof buf - len,
+                                 "%s%u,%d,%d,%d,%d,%d,%d",
+                                 len ? " " : "",
+                                 mtmp->m_id, (int) mtmp->mx, (int) mtmp->my,
+                                 monsndx(mtmp->data), mtmp->mhp, mtmp->mhpmax, fl);
+    }
+    buf[len] = '\0';
+    unity_emit_event_begin("monsters");
+    unity_emit_kv_str("mons", buf);
+    unity_emit_event_end();
+}
+
 static void
 handle_display_nhwindow(va_list ap, void *ret_ptr)
 {
@@ -436,9 +485,11 @@ handle_display_nhwindow(va_list ap, void *ret_ptr)
     unity_emit_kv_bool("blocking", blocking);
     unity_emit_event_end();
 
-    /* The map window's flush is our once-per-display vision tick. */
-    if (w == WIN_MAP)
+    /* The map window's flush is our once-per-display vision + monsters tick. */
+    if (w == WIN_MAP) {
         emit_vision();
+        emit_monsters();
+    }
 }
 
 static void
