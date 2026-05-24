@@ -53,7 +53,7 @@ extern void unity_emit_kv_obj_end(void);
  * pmname) and objects (objects[] / OBJ_NAME) as a burst of JSON-NL events,
  * bracketed by manifest_begin / manifest_end:
  *   {"t":"manifest_begin","monsters":N,"objects":M}
- *   {"t":"manifest_mon","idx":I,"name":"gnome","class":C}
+ *   {"t":"manifest_mon","idx":I,"name":"gnome","class":C,"size":Z}
  *   {"t":"manifest_obj","idx":I,"name":"ring mail","class":C}
  *   {"t":"manifest_end"}
  *
@@ -67,6 +67,12 @@ extern void unity_emit_kv_obj_end(void);
  * placeholders. Emitting mlet/oc_class here keeps the S_* and *_CLASS class
  * data on the NGPL engine side rather than transcribing the monst.c /
  * objects.c class tables into C#.
+ *
+ * `size` on manifest_mon is the monster's permonst msize (MZ_* 0..7: TINY 0,
+ * SMALL 1, MEDIUM/HUMAN 2, LARGE 3, HUGE 4, GIGANTIC 7) straight from
+ * mons[i].msize. The Unity side (M4.8.3) scales the class-base mesh per
+ * monster so a kobold reads small and a giant large, keeping the size table
+ * on the NGPL engine side.
  *
  * This is the modder-facing name->index source of truth. The 3D content
  * registry keys on the raw integer indices the engine already sends per
@@ -96,6 +102,7 @@ unity_emit_manifest(void)
         unity_emit_kv_int("idx", (long long) i);
         unity_emit_kv_str("name", nm ? nm : "");
         unity_emit_kv_int("class", (long long) mons[i].mlet);
+        unity_emit_kv_int("size", (long long) mons[i].msize);
         unity_emit_event_end();
     }
 
