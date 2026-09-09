@@ -22,6 +22,13 @@
 static uint64_t seq_counter = 0;
 static uint64_t start_tick_ms = 0;
 
+/* UNITY_PORT: a side-band context request is scoped to the input event. */
+unsigned long long
+unity_emit_sequence(void)
+{
+    return (unsigned long long) seq_counter;
+}
+
 /* Comma-suppression stack. s_first_pending[d-1] == 1 means the next kv
  * written at depth d must NOT prefix a comma (it's the first key in that
  * scope). depth 0 = no event in flight. */
@@ -219,6 +226,31 @@ unity_emit_kv_obj_end(void)
         fputc('}', stdout);
         s_depth--;
     }
+}
+
+/* UNITY_PORT: structured action arrays, sharing the emitter's scope stack. */
+void
+unity_emit_kv_array_begin(const char *key)
+{
+    emit_sep();
+    emit_json_string(key);
+    fputs(":[", stdout);
+    s_first_pending[s_depth++] = 1;
+}
+
+void
+unity_emit_array_object_begin(void)
+{
+    emit_sep();
+    fputc('{', stdout);
+    s_first_pending[s_depth++] = 1;
+}
+
+void
+unity_emit_array_end(void)
+{
+    fputc(']', stdout);
+    s_depth--;
 }
 
 /* Legacy fallback for shim entries without a typed handler. Emits just

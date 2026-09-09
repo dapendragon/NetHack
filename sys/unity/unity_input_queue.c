@@ -51,6 +51,16 @@ static struct {
 static int               pos_present = 0;
 static CONDITION_VARIABLE cv_pos;
 
+/* UNITY_PORT: side-band affordance requests wake the engine's poskey wait,
+ * but do not answer that prompt. Keep them separate from actual input. */
+#define CONTEXT_QUEUE_CAP 32
+struct unity_context_request {
+    int kind, x, y, action;
+    long long request_id, prompt_seq;
+};
+static struct unity_context_request context_buf[CONTEXT_QUEUE_CAP];
+static int context_head = 0, context_count = 0;
+
 /* Extended command rendezvous (for get_ext_cmd). Index is into the
  * engine's extended command table; -1 means cancel. */
 static int               ext_cmd_value;
@@ -396,6 +406,7 @@ parse_and_enqueue(const char *line)
     int  menu_cancelled = 0;
     int  has_picks = 0;
     int  picks_n = 0;
+    struct unity_context_request context = {0}; /* UNITY_PORT */
     struct unity_menu_pick picks[MENU_PICK_CAP];
 
     if (*p != '{')
@@ -442,6 +453,18 @@ parse_and_enqueue(const char *line)
             next = parse_json_int(p, &pos_x);
             if (!next) return -1;
             p = next;
+        } else if (strcmp(key, "request_id") == 0) {
+            next = parse_json_int64(p, &context.request_id);
+            if (!next) return -1;
+            p = next;
+        } else if (strcmp(key, "prompt_seq") == 0) {
+            next = parse_json_int64(p, &context.prompt_seq);
+            if (!next) return -1;
+            p = next;
+        } else if (strcmp(key, "action_id") == 0) {
+            next = parse_json_int(p, &context.action);
+            if (!next) return -1;
+            p = next;
         } else if (strcmp(key, "y") == 0) {
             next = parse_json_int(p, &pos_y);
             if (!next) return -1;
@@ -483,7 +506,20 @@ parse_and_enqueue(const char *line)
 
     /* Dispatch on cmd. */
     EnterCriticalSection(&cs);
-    if (strcmp(cmd, "key") == 0 && key_val >= 0) {
+    if (!strcmp(cmd, "context_query") || !strcmp(cmd, "context_select")) {
+        /* UNITY_PORT: a bounded FIFO never overwrites a pending selection. */
+        if (context_count >= CONTEXT_QUEUE_CAP || context.request_id <= 0
+            || context.prompt_seq <= 0) {
+            LeaveCriticalSection(&cs);
+            return -1;
+        }
+        context.kind = !strcmp(cmd, "context_query") ? 1 : 2;
+        context.x = pos_x;
+        context.y = pos_y;
+        context_buf[(context_head + context_count) % CONTEXT_QUEUE_CAP] = context;
+        context_count++;
+        WakeConditionVariable(&cv_pos);
+    } else if (strcmp(cmd, "key") == 0 && key_val >= 0) {
         push_key(key_val);
     } else if (strcmp(cmd, "answer_text") == 0) {
         push_text(has_text ? text : "");
@@ -596,12 +632,23 @@ unity_input_queue_pop_text(char *out, size_t outlen)
 }
 
 int
-unity_input_queue_pop_poskey(int *x, int *y, int *mod)
+unity_input_queue_pop_poskey(int *x, int *y, int *mod,
+                             struct unity_context_request *context)
 {
     int k;
     EnterCriticalSection(&cs);
-    while (!pos_present && !shutting_down)
+    context->kind = 0;
+    while (!pos_present && !context_count && !shutting_down)
         SleepConditionVariableCS(&cv_pos, &cs, INFINITE);
+    /* Real input wins a race with a hover query; the latter will be rejected
+     * by its old prompt_seq if serviced at a later poskey. */
+    if (!pos_present && context_count) {
+        *context = context_buf[context_head];
+        context_head = (context_head + 1) % CONTEXT_QUEUE_CAP;
+        context_count--;
+        LeaveCriticalSection(&cs);
+        return 0;
+    }
     if (!pos_present) {
         LeaveCriticalSection(&cs);
         if (x) *x = -1;

@@ -29,9 +29,16 @@ struct unity_menu_pick {
     long      count;
 };
 
+/* UNITY_PORT: layout shared with the standalone Win32 input queue. */
+struct unity_context_request {
+    int kind, x, y, action;
+    long long request_id, prompt_seq;
+};
+
 extern int  unity_input_queue_pop_key(void);
 extern void unity_input_queue_pop_text(char *out, size_t outlen);
-extern int  unity_input_queue_pop_poskey(int *x, int *y, int *mod);
+extern int  unity_input_queue_pop_poskey(int *x, int *y, int *mod,
+                                         struct unity_context_request *context);
 extern int  unity_input_queue_pop_ext_cmd(void);
 extern int  unity_input_queue_pop_menu_pick(struct unity_menu_pick *out,
                                             int outcap,
@@ -46,6 +53,13 @@ extern void unity_emit_kv_str(const char *key, const char *s);
 extern void unity_emit_kv_bool(const char *key, int v);
 extern void unity_emit_kv_obj_begin(const char *key);
 extern void unity_emit_kv_obj_end(void);
+extern unsigned long long unity_emit_sequence(void); /* UNITY_PORT */
+extern void unity_emit_kv_array_begin(const char *);
+extern void unity_emit_array_object_begin(void);
+extern void unity_emit_array_end(void);
+extern int unity_context_actions(int, int,
+                                  void (*)(int, const char *, void *), void *);
+extern int unity_context_select(int, int, int);
 
 /* ---- one-shot content manifest ---- */
 
@@ -898,6 +912,25 @@ handle_getlin(va_list ap, void *ret_ptr)
  * Returns int (key). The engine inspects all four to distinguish a
  * keypress (key != 0) from a position click (key == 0, x/y/mod set).
  * Harness sends `answer_pos` with any subset of {x, y, mod, key}. */
+/* UNITY_PORT: action labels and IDs come directly from the native menu builder. */
+static void
+emit_context_action(int id, const char *label, void *data UNUSED)
+{
+    unity_emit_array_object_begin();
+    unity_emit_kv_int("id", id);
+    unity_emit_kv_str("label", label);
+    unity_emit_kv_obj_end();
+}
+
+static void
+emit_context_scope(const struct unity_context_request *request)
+{
+    unity_emit_kv_int("request_id", request->request_id);
+    unity_emit_kv_int("prompt_seq", request->prompt_seq);
+    unity_emit_kv_int("x", request->x);
+    unity_emit_kv_int("y", request->y);
+}
+
 static void
 handle_nh_poskey(va_list ap, void *ret_ptr)
 {
@@ -906,12 +939,57 @@ handle_nh_poskey(va_list ap, void *ret_ptr)
     int *modp = va_arg(ap, int *);
     int x = -1, y = -1, mod = 0;
     int key;
+    long long prompt_seq;
+    struct unity_context_request request, offered = {0};
 
     unity_emit_event_begin("nh_poskey");
     unity_emit_event_end();
+    prompt_seq = (long long) unity_emit_sequence();
     unity_emit_flush();
 
-    key = unity_input_queue_pop_poskey(&x, &y, &mod);
+    /* UNITY_PORT: queries and rejected selections leave the same prompt blocked;
+     * no parser re-entry, default action, extra turn, or direction replay. */
+    for (;;) {
+        int count = 0, accepted = 0;
+        const char *status;
+        key = unity_input_queue_pop_poskey(&x, &y, &mod, &request);
+        if (!request.kind) break;
+        if (request.kind == 1) {
+            unity_emit_event_begin("context_actions");
+            emit_context_scope(&request);
+            unity_emit_kv_array_begin("actions");
+            if (request.prompt_seq == prompt_seq)
+                count = unity_context_actions(request.x, request.y,
+                                               emit_context_action, 0);
+            unity_emit_array_end();
+            status = request.prompt_seq != prompt_seq ? "stale"
+                         : count ? "ok" : "unavailable";
+            unity_emit_kv_str("status", status);
+            unity_emit_event_end();
+            offered = request;
+            if (!count) offered.request_id = 0;
+        } else {
+            int matches = request.prompt_seq == prompt_seq
+                          && request.request_id == offered.request_id
+                          && request.x == offered.x && request.y == offered.y;
+            if (matches)
+                accepted = unity_context_select(request.x, request.y,
+                                                 request.action);
+            unity_emit_event_begin("context_result");
+            emit_context_scope(&request);
+            unity_emit_kv_str("status", !matches ? "stale"
+                              : accepted ? "queued" : "unavailable");
+            unity_emit_event_end();
+            if (accepted) {
+                x = request.x;
+                y = request.y;
+                mod = 0x4000; /* native action is already on CQ_CANNED */
+                key = 0;
+            }
+        }
+        unity_emit_flush();
+        if (accepted) break;
+    }
 
     if (xp) *xp = (coordxy) x;
     if (yp) *yp = (coordxy) y;

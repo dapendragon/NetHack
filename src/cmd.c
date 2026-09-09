@@ -4417,11 +4417,26 @@ enum menucmd {
     MCMD_TRAVEL,
 };
 
+#ifdef WIN_UNITY
+/* UNITY_PORT: capture the native context-menu builder without constructing a
+ * window or auto-executing its single/default action. Engine thread only. */
+static void (*unity_context_visitor)(int, const char *, void *) = 0;
+static void *unity_context_data = 0;
+#endif
+
 staticfn void
 mcmd_addmenu(winid win, int act, const char *txt)
 {
     anything any;
     int clr = NO_COLOR;
+
+#ifdef WIN_UNITY
+    /* UNITY_PORT */
+    if (unity_context_visitor) {
+        unity_context_visitor(act, txt, unity_context_data);
+        return;
+    }
+#endif
 
     /* TODO: fixed letters for the menu entries? */
     any = cg.zeroany;
@@ -4895,6 +4910,64 @@ there_cmd_menu(coordxy x, coordxy y, int mod)
     return ch;
 }
 
+#ifdef WIN_UNITY
+/* UNITY_PORT: same native affordance collection and execution as [t]herecmdmenu.
+ * Hidden terrain/monsters cannot be probed through this transport. CLICK_2 makes
+ * closing an open door discoverable; add the native far CLICK_1 actions too. */
+int
+unity_context_actions(int x, int y,
+                      void (*visitor)(int, const char *, void *), void *data)
+{
+    int count = 0, act = MCMD_NOTHING;
+    int old_tbx = gt.tbx, old_tby = gt.tby;
+#ifdef USE_ISAAC64
+    extern void unity_context_rng(boolean);
+#endif
+    if (!iflags.in_parse || program_state.input_state != commandInp
+        || !isok(x, y) || (!u_at(x, y) && !cansee(x, y)) || !visitor)
+        return 0;
+#ifdef USE_ISAAC64
+    unity_context_rng(FALSE);
+#endif
+    unity_context_visitor = visitor;
+    unity_context_data = data;
+    if (u_at(x, y))
+        count += there_cmd_menu_self(WIN_ERR, x, y, &act);
+    else if (next2u(x, y))
+        count += there_cmd_menu_next2u(WIN_ERR, x, y, CLICK_2, &act);
+    else
+        count += there_cmd_menu_far(WIN_ERR, x, y, CLICK_1);
+    count += there_cmd_menu_common(WIN_ERR, x, y, CLICK_2, &act);
+    unity_context_visitor = 0;
+    unity_context_data = 0;
+    gt.tbx = old_tbx;
+    gt.tby = old_tby;
+#ifdef USE_ISAAC64
+    unity_context_rng(TRUE);
+#endif
+    return count;
+}
+
+static void
+unity_context_find(int id, const char *label UNUSED, void *data)
+{
+    int *choice = (int *) data;
+    if (id == choice[0]) choice[1] = 1;
+}
+
+int
+unity_context_select(int x, int y, int action)
+{
+    int choice[2];
+    choice[0] = action;
+    choice[1] = 0;
+    (void) unity_context_actions(x, y, unity_context_find, choice);
+    if (!choice[1]) return 0;
+    act_on_act(action, x - u.ux, y - u.uy);
+    return 1;
+}
+#endif
+
 staticfn char
 here_cmd_menu(void)
 {
@@ -4905,6 +4978,11 @@ here_cmd_menu(void)
 void
 click_to_cmd(coordxy x, coordxy y, int mod)
 {
+#ifdef WIN_UNITY
+    /* UNITY_PORT: context_select already queued the native action. Let the
+     * normal click return path resume rhack without queuing a mouse binding. */
+    if (mod == 0x4000) return;
+#endif
     gc.clicklook_cc.x = x;
     gc.clicklook_cc.y = y;
 

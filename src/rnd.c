@@ -28,6 +28,20 @@ static struct rnglist_t rnglist[] = {
     { rn2_on_display_rng, FALSE, { 0 } },       /* DISP */
 };
 
+#ifdef WIN_UNITY
+/* UNITY_PORT: asking for action labels (including hallucinated names) must not
+ * advance either gameplay or display randomness. Engine-thread, non-nested. */
+void
+unity_context_rng(boolean restore)
+{
+    static struct rnglist_t saved[SIZE(rnglist)];
+    if (restore)
+        memcpy(rnglist, saved, sizeof rnglist);
+    else
+        memcpy(saved, rnglist, sizeof rnglist);
+}
+#endif
+
 staticfn int
 whichrng(int (*fn)(int))
 {
