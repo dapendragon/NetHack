@@ -130,8 +130,9 @@ unity_emit_manifest(void)
  * open object scope. Caller is responsible for opening/closing the scope
  * via unity_emit_kv_obj_begin / unity_emit_kv_obj_end.
  *
- * Discriminator-by-field-presence: at most one *_idx (or *_frame /
- * *_pos / warn_level) is emitted; the harness/renderer dispatches on
+ * Discriminator-by-field-presence: normally one *_idx (or *_frame /
+ * *_pos / warn_level) is emitted; corpses/statues also carry obj_idx
+ * alongside their species mon_idx. The harness/renderer dispatches on
  * which key is present. flags (the MG_* bitset) carries variant
  * information (hero/pet/corpse/statue/invis/nothing/unexplored/...).
  *
@@ -153,8 +154,11 @@ emit_glyph_fields(const glyph_info *gi)
         /* No idx; flags carries MG_INVIS. */
     } else if (glyph_is_body(g)) {
         unity_emit_kv_int("mon_idx", glyph_to_body_corpsenm(g));
+        /* UNITY_PORT: object identity is distinct from the corpse's species. */
+        unity_emit_kv_int("obj_idx", glyph_to_obj(g));
     } else if (glyph_is_statue(g)) {
         unity_emit_kv_int("mon_idx", glyph_to_statue_corpsenm(g));
+        unity_emit_kv_int("obj_idx", glyph_to_obj(g));
     } else if (glyph_is_monster(g)) {
         unity_emit_kv_int("mon_idx", glyph_to_mon(g));
     } else if (glyph_is_object(g)) {
@@ -207,6 +211,18 @@ emit_glyph_fields(const glyph_info *gi)
  * dispatch table. Pure-emit handlers ignore ret_ptr; ret-writing /
  * input-blocking handlers use it. */
 
+/* UNITY_PORT: S_ndoor merges both orientations. Preserve the engine's
+ * orientation only for an actually displayed doorway on a door cell. */
+static void
+emit_doorway_orientation(const glyph_info *gi, int w, int x, int y)
+{
+    if (w == WIN_MAP && isok(x, y) && gi
+        && glyph_is_cmap(gi->glyph)
+        && glyph_to_cmap(gi->glyph) == S_ndoor
+        && levl[x][y].typ == DOOR)
+        unity_emit_kv_bool("horizontal", levl[x][y].horizontal);
+}
+
 static void
 handle_print_glyph(va_list ap, void *ret_ptr)
 {
@@ -223,9 +239,11 @@ handle_print_glyph(va_list ap, void *ret_ptr)
     unity_emit_kv_int("y", y);
     unity_emit_kv_obj_begin("g");
     emit_glyph_fields(gi);
+    emit_doorway_orientation(gi, w, x, y); /* UNITY_PORT */
     unity_emit_kv_obj_end();
     unity_emit_kv_obj_begin("bg");
     emit_glyph_fields(bgi);
+    emit_doorway_orientation(bgi, w, x, y); /* UNITY_PORT */
     unity_emit_kv_obj_end();
     unity_emit_event_end();
 }
@@ -416,7 +434,9 @@ emit_vision(void)
     /* Worst case every cell visible: "79,20 " is 6 chars, COLNO*ROWNO
      * cells → ~10 KB. Round up generously and bound-check each append. */
     static char buf[COLNO * ROWNO * 8];
+    static char rock_buf[COLNO * ROWNO * 8];
     size_t len = 0;
+    size_t rock_len = 0;
     coordxy x, y;
 
     for (y = 0; y < ROWNO; y++) {
@@ -428,12 +448,23 @@ emit_vision(void)
                 goto done; /* defensive: never overrun */
             len += (size_t) snprintf(buf + len, sizeof buf - len,
                                      "%s%d,%d", len ? " " : "", x, y);
+            /* UNITY_PORT: expose only the visible solid-rock appearance.
+             * Secret corridors look identical to stone; never emit their type.
+             * Arboreal stone is displayed as trees, not dungeon rock. */
+            if (!svl.level.flags.arboreal
+                && (levl[x][y].typ == STONE || levl[x][y].typ == SCORR)
+                && rock_len + 12 < sizeof rock_buf)
+                rock_len += (size_t) snprintf(rock_buf + rock_len,
+                    sizeof rock_buf - rock_len, "%s%d,%d",
+                    rock_len ? " " : "", x, y);
         }
     }
 done:
     buf[len] = '\0';
+    rock_buf[rock_len] = '\0';
     unity_emit_event_begin("vision");
     unity_emit_kv_str("cells", buf);
+    unity_emit_kv_str("rock_cells", rock_buf);
     unity_emit_event_end();
 }
 
